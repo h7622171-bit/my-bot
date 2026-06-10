@@ -11,7 +11,7 @@ from telethon.tl.functions.photos import UploadProfilePhotoRequest, GetUserPhoto
 from telethon.tl.types import InputPhoto
 from telethon.errors import FloodWaitError
 
-# --- إعدادات الحساب (تُسحب تلقائياً من Railway) ---
+# إعدادات الحساب (تُسحب من إعدادات السيرفر)
 API_ID = int(os.environ.get("API_ID"))
 API_HASH = os.environ.get("API_HASH")
 SESSION_STRING = os.environ.get("SESSION_STRING")
@@ -42,41 +42,29 @@ async def clone_profile_cmd(event):
     else: return await event.edit("⚠️ يرجى الرد على الشخص أو كتابة اليوزر.")
 
     await event.edit("🚀 `بدء عملية الانتحال (النسخة المستقرة)...`")
-
     try:
-        # 1. جلب بيانات الهدف
         full_target = await client(GetFullUserRequest(target))
         target_bio = full_target.full_user.about or ""
-        
-        # 2. حفظ بياناتك (احتياط)
         me = await client.get_me()
         full_me = await client(GetFullUserRequest('me'))
         my_bio = full_me.full_user.about or ""
-        
         conn = sqlite3.connect('final_master.db')
         cursor = conn.cursor()
         cursor.execute('INSERT OR REPLACE INTO profile_backup (id, first_name, last_name, bio) VALUES (1, ?, ?, ?)', 
                        (me.first_name, me.last_name or "", my_bio))
         conn.commit()
         conn.close()
-
-        # 3. حفظ الصور الأصلية
         for f in glob.glob('backup_photos/*'): os.remove(f)
         photos = await client.get_profile_photos('me')
         for i, photo in enumerate(photos):
             await client.download_media(photo, f'backup_photos/orig_{i}.jpg')
-
-        # 4. التحديث
         await client(UpdateProfileRequest(first_name=target.first_name, last_name=target.last_name or "", about=target_bio))
-        
-        # 5. تنظيف ورفع (بفواصل زمنية لمنع الحظر)
         if photos:
             await client(DeletePhotosRequest(id=[InputPhoto(id=p.id, access_hash=p.access_hash, file_reference=p.file_reference) for p in photos]))
-            
         target_photos = await client(GetUserPhotosRequest(user_id=target.id, offset=0, max_id=0, limit=5))
         for photo in reversed(target_photos.photos):
             file = await client.download_media(photo)
-            await asyncio.sleep(2) # زيادة الوقت لمنع الخطأ الأمني
+            await asyncio.sleep(2)
             try:
                 if file.endswith(('.mp4', '.mov')):
                     await client(UploadProfilePhotoRequest(video=await client.upload_file(file), video_start_ts=0.0))
@@ -84,9 +72,7 @@ async def clone_profile_cmd(event):
                     await client(UploadProfilePhotoRequest(file=await client.upload_file(file)))
             finally:
                 if os.path.exists(file): os.remove(file)
-        
         await event.edit(f"✅ **تم انتحال {target.first_name} بنجاح.**")
-        
     except Exception as e:
         await event.edit(f"❌ خطأ: {str(e)}")
 
@@ -99,19 +85,15 @@ async def restore_profile_cmd(event):
     cursor.execute('SELECT first_name, last_name, bio FROM profile_backup WHERE id = 1')
     row = cursor.fetchone()
     conn.close()
-    
     if not row: return await event.edit("⚠️ لا توجد نسخة احتياطية.")
-    
     try:
         await client(UpdateProfileRequest(first_name=row[0], last_name=row[1], about=row[2]))
         photos = await client.get_profile_photos('me')
         if photos:
             await client(DeletePhotosRequest(id=[InputPhoto(id=p.id, access_hash=p.access_hash, file_reference=p.file_reference) for p in photos]))
-        
         for f in sorted(glob.glob('backup_photos/orig_*.jpg')):
             await client(UploadProfilePhotoRequest(file=await client.upload_file(f)))
-            await asyncio.sleep(2) # زيادة الوقت لمنع الخطأ الأمني
-            
+            await asyncio.sleep(2)
         await event.edit("✅ **تمت استعادة هويتك بالكامل.**")
     except Exception as e:
         await event.edit(f"❌ خطأ أثناء الاستعادة: {str(e)}")
